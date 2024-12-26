@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Real-Time Voice Calling</title>
+  <style>
+    #clientsList {
+      list-style-type: none;
+      padding: 0;
+    }
+    #clientsList li {
+      cursor: pointer;
+      padding: 5px;
+      border: 1px solid #ccc;
+      margin: 2px;
+    }
+    #clientsList li:hover {
+      background-color: #eee;
+    }
+    #callNotification {
+      display: none;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      border: 1px solid #000;
+      padding: 20px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <h1>Connected Clients</h1>
+  <ul id="clientsList"></ul>
+  <audio id="localAudio" autoplay muted></audio>
+  <audio id="remoteAudio" autoplay></audio>
+
+  <div id="callNotification">
+    <p id="callMessage"></p>
+    <button onclick="handleCallResponse(true)">Accept</button>
+    <button onclick="handleCallResponse(false)">Reject</button>
+  </div>
+
+  <!-- Use Socket.IO client library from CDN -->
+  <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+  <script>
+    const socket = io('http://localhost:3000');
+    const localAudio = document.getElementById('localAudio');
+    const remoteAudio = document.getElementById('remoteAudio');
+    const clientsList = document.getElementById('clientsList');
+    const callNotification = document.getElementById('callNotification');
+    const callMessage = document.getElementById('callMessage');
+
+    const configuration = {
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+    let localStream;
+    let peerConnection;
+    let targetClientId;
+    let callerId;
+
+    async function startCall(clientId) {
+      targetClientId = clientId;
+      socket.emit('call', { targetClientId, callerName: 'Your Name' });
+    }
+
+    socket.on('clients', (clients) => {
+      clientsList.innerHTML = '';
+      clients.forEach(client => {
+        const listItem = document.createElement('li');
+        listItem.textContent = client.name;
+        listItem.onclick = () => startCall(client.id);
+        clientsList.appendChild(listItem);
+      });
+    });
+
+    socket.on('call', (data) => {
+      callerId = data.callerId;
+      callMessage.textContent = `${data.callerName} is calling you`;
+      callNotification.style.display = 'block';
+    });
+
+    function handleCallResponse(accepted) {
+      callNotification.style.display = 'none';
+      socket.emit('call-response', { callerId, accepted });
+    }
+
+    socket.on('call-response', async (data) => {
+      if (data.accepted) {
+        // Get audio stream from user's microphone
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localAudio.srcObject = localStream;
+
+        peerConnection = new RTCPeerConnection(configuration);
+        peerConnection.addStream(localStream);
+
+        peerConnection.onaddstream = (event) => {
+          remoteAudio.srcObject = event.stream;
+        };
+
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit('ice-candidate', { targetClientId, candidate: event.candidate });
+          }
+        };
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('offer', { targetClientId, offer });
+      } else {
+        alert('Call rejected');
+      }
+    });
+
+    socket.on('offer', async (data) => {
+      const { offer, fromClientId } = data;
+
+      targetClientId = fromClientId;
+
+      peerConnection = new RTCPeerConnection(configuration);
+      peerConnection.addStream(localStream);
+
+      peerConnection.onaddstream = (event) => {
+        remoteAudio.srcObject = event.stream;
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('ice-candidate', { targetClientId, candidate: event.candidate });
+        }
+      };
+
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.emit('answer', { targetClientId, answer });
+    });
+
+    socket.on('answer', async (data) => {
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+    });
+
+    socket.on('ice-candidate', async (data) => {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+      } catch (error) {
+        console.error('Error adding received ICE candidate', error);
+      }
+    });
+  </script>
+</body>
+</html>
