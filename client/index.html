@@ -58,6 +58,20 @@
     let targetClientId;
     let callerId;
 
+    // Request microphone access and play loopback audio on page load
+    async function initializeAudio() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localAudio.srcObject = localStream; // Play local audio as loopback
+        console.log('Microphone access granted.');
+      } catch (error) {
+        console.error('Error accessing microphone:', error);
+        alert('Microphone access is required for voice calls.');
+      }
+    }
+
+    window.onload = initializeAudio; // Trigger initialization when the page loads
+
     async function startCall(clientId) {
       targetClientId = clientId;
       socket.emit('call', { targetClientId, callerName: 'Your Name' });
@@ -86,10 +100,6 @@
 
     socket.on('call-response', async (data) => {
       if (data.accepted) {
-        // Get audio stream from user's microphone
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        localAudio.srcObject = localStream;
-
         peerConnection = new RTCPeerConnection(configuration);
         peerConnection.addStream(localStream);
 
